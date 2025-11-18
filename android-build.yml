@@ -1,0 +1,87 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install npm dependencies
+      run: |
+        npm ci || npm install
+
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Install required packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y unzip wget
+
+    - name: Install Android SDK command-line tools
+      run: |
+        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+        curl -sS https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -o cmdline.zip
+        unzip -q cmdline.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools/latest
+        mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/* $ANDROID_SDK_ROOT/cmdline-tools/latest/ || true
+        rm -f cmdline.zip
+        export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+        yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses || true
+        $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+
+    - name: Export Android envs
+      run: |
+        echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+        echo "PATH=$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
+
+    - name: Install Cordova CLI
+      run: | 
+        npm install -g cordova
+        cordova --version
+
+    - name: Prepare Android platform (if missing)
+      run: |
+        if [ ! -d "platforms/android" ]; then
+          cordova platform add android@latest
+        fi
+
+    - name: Copy web assets (ensure www contains your React build)
+      run: |
+        echo "www folder files:"
+        ls -la www || true
+
+    - name: Build Android (release)
+      run: |
+        cordova build android --release --verbose
+      timeout-minutes: 30
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-release-apk
+        path: |
+          platforms/android/app/build/outputs/apk/release/*.apk
+
+    - name: Show build output folder
+      if: always()
+      run: ls -la platforms/android/app/build/outputs/apk || true
